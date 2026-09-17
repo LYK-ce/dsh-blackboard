@@ -102,7 +102,7 @@ devDependencies 里那一长串 `@deepseek-ai/dsh-client-*` 不是装饰：dsh �
 在一条全新的独立安装上（`pnpm install` → `pnpm run verify`，不依赖任何 dsh checkout）：
 
 - `pnpm run typecheck` 零错误——两个 program 都是对着 npm 上发布的 `0.1.6-alpha.1` 类型编译的；
-- `pnpm run test` **61/61** 通过；
+- `pnpm run test` **64/64** 通过（含快照请求的交付闭环、参数与迟到交付分支、账本超时与后请求抢占）；
 - `pnpm run build` 产出 `lib/client.js`（`pnpm run verify` 里 build 排在 test 前面：`tests/manifest.spec.ts` 检查的是构建产物，全新 clone 上先 test 会 ENOENT）；
 - `pnpm run probe` 确认 tsx 能解析 host 半边的包名导入。
 
@@ -115,7 +115,7 @@ devDependencies 里那一长串 `@deepseek-ai/dsh-client-*` 不是装饰：dsh �
 - **`blackboard_read` 需要面板开着。** host 没有 canvas，图只能由浏览器里的面板产出：工具先登记一次请求，面板下一次轮询（≤1s）从场景响应里看到它，出图 POST 回来；超过 2.5s 就报错。面板没开就没有图可给。
 - **host 半边的改动要重启 `dsh` 才生效**：host 由 tsx 直接跑源码、在启动时注册工具与路由，没有热重载；浏览器半边（`lib/client.js`）会热更新。
 - **1 秒轮询**，不是推送：agent 画完到人看见最多 1s，空闲时每秒一次请求。
-- **磁盘 ops 文件没有清理策略**：会话画得越多文件越大，且删会话不会删这个文件。
+- **磁盘上没有任何自动清理。** 每个会话在 `$DSH_HOME/blackboard/` 下留两个文件：`<sessionId>.jsonl`（append-only 的 op 流，只增不减）与 `<sessionId>.png`（`blackboard_read` 的快照，每次覆盖同一路径，1024² 下约 280 KB）。两者都不随会话删除、不随插件卸载，也没有条数或体积上限——数据目录按"用过的会话数"线性增长（实测一个会话 ≈ 57 KB jsonl + 286 KB png）。另外 `erase` / `clear` 都是**软删除**（往流里追加 `patch`），所以"清空画板"只会让 jsonl 更长。目前只能手动收拾，PNG 是随时可由面板重建的，删了不影响画板本身：`Remove-Item $env:DSH_HOME\blackboard\*.png`；"保留最近 N 张、最旧先删"这类策略还没做。
 - **工具 7 支**（`line`/`arrow`/`rect`/`circle`/`text`/`stroke`/`erase`）：`clear` 不开放给模型——它会一次抹掉人与 agent 的全部笔迹。
 - **不用 CSS Modules**：自建打包不含 dsh 仓库的样式注入，面板只用内联 style + `--dsw-*` 变量。
 - **工具注册在 host 平面**，所有 preset（含 `minimal`）的模型工具目录里都会出现 `blackboard_draw`。

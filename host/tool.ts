@@ -1,6 +1,9 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { DrawCommand } from '../core/commands.ts'
+import type { SnapshotRequests } from './snapshots.ts'
 import type { BoardStore } from './store.ts'
 
 /** 面板与工具共用的虚拟坐标范围，写在描述里当模型的坐标系约定。 */
@@ -132,6 +135,51 @@ export function createDrawTool(store: BoardStore): ToolDefinition {
         added: delta.ops.flatMap((op) => (op.op === 'add' ? [op.element.id] : [])),
         elements: scene.elements.filter((element) => !element.isDeleted).length,
       }
+    },
+  })
+}
+
+/** 等面板交图的上限，毫秒：面板每秒轮询一次，留两拍余量。 */
+const SNAPSHOT_TIMEOUT_MS = 2500
+
+/**
+ * 读画板工具：向浏览器里的面板要一张**整块板**的 PNG，落到磁盘并把路径交回模型。
+ *
+ * host 没有 canvas，图只能由面板产出，所以面板没开（或没响应）时这里超时报错。
+ * 导出的图与人的缩放/平移无关，永远是完整的 0..1000 板面。
+ * @param snapshots - 快照请求账本。
+ * @param dataDir - 快照落盘目录（与 ops 文件同一个目录）。
+ * @returns 可注册进 `ctx.tools` 的定义。
+ */
+export function createSnapshotTool(snapshots: SnapshotRequests, dataDir: string): ToolDefinition {
+  return defineTool({
+    name: 'blackboard_read',
+    description: 'Read the current shared blackboard as an image file. The board is drawn by the open board panel in the '
+      + "browser, so this fails when no board panel is open for this session. The image always covers the whole board, "
+      + "independent of the panel's zoom or pan. The returned PNG is written to disk; read that path with read_image to see it.",
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          path: { type: 'string', required: true },
+          bytes: { type: 'integer', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `Board snapshot written to ${value.path} (${value.bytes} bytes). Read it with read_image to see the drawing.`,
+      }],
+    },
+    async execute(_args, exec) {
+      const sessionId = exec.agent?.session.id
+      // 没有 agent 就没有会话，也就没有该向哪块板子要图。
+      if (sessionId === undefined) throw new Error('blackboard_read: the tool ran without an agent session')
+      const png = await snapshots.request(sessionId, SNAPSHOT_TIMEOUT_MS, exec.signal)
+      const path = join(dataDir, `${sessionId.replace(/[^A-Za-z0-9._-]/g, '_')}.png`)
+      await writeFile(path, png)
+      return { path, bytes: png.byteLength }
     },
   })
 }

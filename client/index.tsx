@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { OPS_PATH, SCENE_PATH } from '../shared/protocol.ts'
+import { OPS_PATH, SCENE_PATH, SNAPSHOT_PATH } from '../shared/protocol.ts'
 import type { AppendBody, BoardDelta } from '../shared/protocol.ts'
 // 类型专用：把 locale 服务的 Context 合并拉进程序。
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -128,6 +128,25 @@ export function apply(ctx: Context): void {
     return { ok: true, left: draft.attachments }
   }
 
+  /**
+   * 把 host 要的快照交回去。
+   * @param sessionId - 面板所属会话。
+   * @param requestId - 场景响应里带来的请求 id。
+   * @param png - 整块板的 PNG。
+   * @returns 交付完成；409 表示 host 已经不等这张图了（超时后的迟到交付），按成功算。
+   */
+  const sendSnapshot = async (sessionId: SessionId, requestId: string, png: Blob): Promise<void> => {
+    const query = `sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`
+    const response = await fetch(`${SNAPSHOT_PATH}?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: png,
+    })
+    if (!response.ok && response.status !== 409) {
+      throw new Error(`blackboard: snapshot upload failed with ${response.status}`)
+    }
+  }
+
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'blackboard: dictionaries')
   // tab 标题与 guide 文案都是注册期文本，走 thunk 才能跟随语言切换而不重新注册。
   const t = ctx.locale.bind(NS)
@@ -145,9 +164,10 @@ export function apply(ctx: Context): void {
     })
     if (existing === undefined) sources.set(sessionId, source)
     return {
-      hooks: { scene: source },
+      hooks: { scene: source, snapshotRequest: source.snapshotRequest },
       draw: source.send,
       ask: (png, text) => askAgent(sessionId, png, text),
+      snapshot: (requestId, png) => sendSnapshot(sessionId, requestId, png),
     }
   }
   // 不写 patterns：这是个 page type，按 kind 打开、不认资源地址（ui-sidebar-right/src/client/tab-registry.ts）。

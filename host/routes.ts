@@ -1,22 +1,51 @@
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { DrawCommand } from '../core/commands.ts'
 import type { AppendBody } from '../shared/protocol.ts'
+import type { SnapshotRequests } from './snapshots.ts'
 import type { BoardStore } from './store.ts'
 
 /**
  * `GET /api/blackboard.scene?sessionId=<id>&since=<rev>`。
+ * 响应多带一个 `snapshotRequest`：面板看到非 null 就该为这次请求出一张整块板的图交回来。
  * @param store - 画板存储。
+ * @param snapshots - 快照请求账本。
  * @param request - 已通过 Connection 信任检查的请求。
- * @returns `{ revision, ops }`；查询参数不合法时 400。
+ * @returns `{ revision, ops, snapshotRequest }`；查询参数不合法时 400。
  */
-export async function handleScene(store: BoardStore, request: Request): Promise<Response> {
+export async function handleScene(
+  store: BoardStore,
+  snapshots: SnapshotRequests,
+  request: Request,
+): Promise<Response> {
   const query = new URL(request.url).searchParams
   const sessionId = query.get('sessionId')
   const since = Number(query.get('since') ?? '0')
   if (sessionId === null || sessionId === '' || !Number.isSafeInteger(since) || since < 0) {
     return new Response('Invalid blackboard scene query.', { status: 400 })
   }
-  return Response.json(await store.read(sessionId as SessionId, since))
+  const delta = await store.read(sessionId as SessionId, since)
+  return Response.json({ ...delta, snapshotRequest: snapshots.outstanding(sessionId) })
+}
+
+/**
+ * `POST /api/blackboard.snapshot?sessionId=<id>&requestId=<id>`，body 是 PNG 原始字节。
+ * @param snapshots - 快照请求账本。
+ * @param request - 已通过 Connection 信任检查的请求。
+ * @returns `{ delivered: true }`；参数不合法或 body 为空时 400，没有对应等待请求时 409（多半是超时后的迟到交付）。
+ */
+export async function handleSnapshot(snapshots: SnapshotRequests, request: Request): Promise<Response> {
+  const query = new URL(request.url).searchParams
+  const sessionId = query.get('sessionId')
+  const requestId = query.get('requestId')
+  if (sessionId === null || sessionId === '' || requestId === null || requestId === '') {
+    return new Response('Invalid blackboard snapshot query.', { status: 400 })
+  }
+  const png = new Uint8Array(await request.arrayBuffer())
+  if (png.byteLength === 0) return new Response('Empty blackboard snapshot body.', { status: 400 })
+  if (!snapshots.deliver(sessionId, requestId, png)) {
+    return new Response('No matching blackboard snapshot request.', { status: 409 })
+  }
+  return Response.json({ delivered: true })
 }
 
 /**

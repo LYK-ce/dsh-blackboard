@@ -48,6 +48,9 @@ export interface CanvasOptions {
   readonly onCommand: (command: DrawCommand) => void
 }
 
+/** 导出范围：`view` 是人当前看到的画面，`board` 永远是完整的 0..1000 板面。 */
+export type BoardScope = 'view' | 'board'
+
 /** 画布句柄。 */
 export interface CanvasHandle {
   /**
@@ -58,9 +61,10 @@ export interface CanvasHandle {
   update(scene: Scene): void
   /**
    * 导出当前场景层。
+   * @param scope - 导出范围，默认人当前看到的视野。
    * @returns PNG；画布没有内容时也返回一张空白图。
    */
-  toPng(): Promise<Blob>
+  toPng(scope?: BoardScope): Promise<Blob>
   /**
    * 摘掉监听、观察者与 DOM。
    * @returns 无。
@@ -319,16 +323,32 @@ export function mountCanvas(host: HTMLElement, options: CanvasOptions): CanvasHa
       scene = next
       render(sceneCtx, scene, viewport)
     },
-    // 只导场景层：实时层是还没提交的手势，不该进图；导出的是当前视野（缩放/平移之后的画面）。
-    toPng: () => new Promise<Blob>((resolve, reject) => {
-      // 合成到白底再编码：元素上的白底不进入 canvas 像素，透明 PNG 被模型压到黑底时近黑笔迹会看不见。
+    // 只导场景层：实时层是还没提交的手势，不该进图。
+    // `view` 导人当前看到的画面；`board` 另开一张方图按 1:1 渲染整块板，与缩放/平移无关。
+    toPng: (scope: BoardScope = 'view') => new Promise<Blob>((resolve, reject) => {
+      // 合成到白底再编码：渲染只 clearRect，透明 PNG 被模型压到黑底时近黑笔迹会看不见。
       const sheet = document.createElement('canvas')
-      sheet.width = sceneCanvas.width
-      sheet.height = sceneCanvas.height
-      const ctx = context2d(sheet)
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, sheet.width, sheet.height)
-      ctx.drawImage(sceneCanvas, 0, 0)
+      if (scope === 'board') {
+        // 整块板按 1024px 见方导出：0..1000 的虚拟坐标铺满它。
+        const px = 1024
+        const layer = document.createElement('canvas')
+        layer.width = px
+        layer.height = px
+        render(context2d(layer), scene, { scale: px / 1000, offsetX: 0, offsetY: 0 })
+        sheet.width = px
+        sheet.height = px
+        const ctx = context2d(sheet)
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, px, px)
+        ctx.drawImage(layer, 0, 0)
+      } else {
+        sheet.width = sceneCanvas.width
+        sheet.height = sceneCanvas.height
+        const ctx = context2d(sheet)
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, sheet.width, sheet.height)
+        ctx.drawImage(sceneCanvas, 0, 0)
+      }
       sheet.toBlob((blob) => {
         if (blob === null) reject(new Error('blackboard: the canvas produced no PNG'))
         else resolve(blob)

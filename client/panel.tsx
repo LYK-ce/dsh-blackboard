@@ -9,7 +9,7 @@ import type { DrawCommand } from '../core/index.ts'
 import { DEFAULT_STYLE, mountCanvas } from './canvas.ts'
 import type { BoardStyle, BoardTool, CanvasHandle } from './canvas.ts'
 import type { BlackboardKey } from './locale.ts'
-import type { SceneSource } from './source.ts'
+import type { ObservableValue, SceneSource } from './source.ts'
 
 /**
  * 把画板交给 agent 的结果。
@@ -19,10 +19,13 @@ export type BoardAskResult =
   | { readonly ok: true; readonly left: number }
   | { readonly ok: false; readonly reason: string }
 
-/** 画板视图的注入面：面板私有的可观察源，加两个动作。 */
+/** 画板视图的注入面：面板私有的可观察源，加三个动作。 */
 export interface BlackboardInjected {
-  /** 面板私有的场景源；框架把它绑成 `useScene`。 */
-  hooks: { scene: SceneSource }
+  /**
+   * 面板私有的可观察源；框架把它们绑成 `useScene` 与 `useSnapshotRequest`。
+   * `snapshotRequest` 非 null 就表示 host 侧有个工具正在等这张图。
+   */
+  hooks: { scene: SceneSource; snapshotRequest: ObservableValue<string | null> }
   /**
    * 追加一批命令。
    * @param commands - 命令。
@@ -36,6 +39,13 @@ export interface BlackboardInjected {
    * @returns 成功，或面板要显示的原因。
    */
   ask: (png: Blob, text: string) => Promise<BoardAskResult>
+  /**
+   * 把 host 要的快照交回去（整块板的 PNG）。
+   * @param requestId - 场景响应里带来的请求 id。
+   * @param png - 整块板的 PNG。
+   * @returns 交付完成；host 已经不等这张图时静默成功。
+   */
+  snapshot: (requestId: string, png: Blob) => Promise<void>
 }
 
 /** 画板视图的完整 props：运行时份额 + 注入面 + 文案位。 */
@@ -86,7 +96,7 @@ function describe(error: unknown): string {
  * @param props - 框架给的运行时份额、注入面与 `t`。
  * @returns 面板元素。
  */
-export function BlackboardPanel({ t, useScene, draw, ask }: BlackboardPanelProps): JSX.Element {
+export function BlackboardPanel({ t, useScene, useSnapshotRequest, draw, ask, snapshot }: BlackboardPanelProps): JSX.Element {
   const [style, setStyle] = useState<BoardStyle>(DEFAULT_STYLE)
   const [status, setStatus] = useState('')
   const scene = useScene((snapshot) => snapshot)
@@ -133,6 +143,19 @@ export function BlackboardPanel({ t, useScene, draw, ask }: BlackboardPanelProps
   useEffect(() => {
     canvas.current?.update(scene)
   }, [scene])
+
+  // host 侧的工具要图时，场景响应会带上请求 id；这里出一张整块板的图交回去。
+  const want = useSnapshotRequest((value) => value)
+
+  useEffect(() => {
+    if (want === null) return
+    const handle = canvas.current
+    if (handle === null) return
+    void handle.toPng('board').then(
+      (png) => snapshot(want, png),
+      (error: unknown) => { setStatus(t('status.failed', { reason: describe(error) })) },
+    )
+  }, [want, snapshot, t])
 
   const elements = scene.elements.reduce((count, element) => (element.isDeleted ? count : count + 1), 0)
 

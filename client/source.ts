@@ -4,19 +4,25 @@ import type { Scene } from '../core/scene.ts'
 import { applyOps } from '../shared/ops.ts'
 import type { BoardDelta } from '../shared/protocol.ts'
 
-/** 面板用的可观察场景源。 */
-export interface SceneSource {
+/** 一个可观察值；框架把它绑成 `use<Name>`。 */
+export interface ObservableValue<T> {
   /**
-   * 当前场景。
-   * @returns 场景没动时返回同一个对象引用。
+   * 当前值。
+   * @returns 值没变时返回同一个引用。
    */
-  getSnapshot(): Scene
+  getSnapshot(): T
   /**
-   * 订阅变化；第一个订阅者启动轮询，最后一个走了就停。
-   * @param listener - 场景变化时调用。
+   * 订阅变化。
+   * @param listener - 值变化时调用。
    * @returns 退订。
    */
   subscribe(listener: () => void): () => void
+}
+
+/** 面板用的可观察场景源。 */
+export interface SceneSource extends ObservableValue<Scene> {
+  /** 该不该出图；非 null 时就是这次快照请求的 id。 */
+  readonly snapshotRequest: ObservableValue<string | null>
   /**
    * 追加一批命令。
    * @param commands - 命令。
@@ -40,23 +46,42 @@ export interface SceneSourceOptions {
  *
  * 这里不做乐观追加：id 由 host 唯一分配，本地先画一笔再回滚 id 只会引入第二条真相。
  * 本机回环的往返延迟远小于人的手感阈值。
+ *
+ * 除了场景，源还带一个 {@link createSceneSource.snapshotRequest}：host 侧的工具要一张画板
+ * 快照时会把它挂到场景响应上，面板看到非 null 就出图交回去（host 没有 canvas，图只能面板出）。
  * @param options - 读/追加实现与轮询间隔。
  * @returns 可观察源。
  */
-export function createSceneSource(options: SceneSourceOptions): SceneSource {
+export function createSceneSource(options: SceneSourceOptions): SceneSource & {
+  /** 该不该出图；非 null 时就是这次快照请求的 id。 */
+  readonly snapshotRequest: ObservableValue<string | null>
+} {
   let scene = createScene()
   let revision = 0
+  let snapshotRequest: string | null = null
   let timer: ReturnType<typeof setInterval> | undefined
   /** 串行化 append：两份 append 响应乱序到达时，后到的那份会让 revision 倒退。 */
   let sending: Promise<unknown> = Promise.resolve()
   const listeners = new Set<() => void>()
 
+  const notify = (): void => {
+    for (const listener of listeners) listener()
+  }
+
   /**
    * 折入一份 delta。轮询与 append 的响应可能同时到，所以要分清三种情形：落后的丢掉、
    * 有重叠的只取没见过的部分、**有缺口的整份重来**。
+   *
+   * 快照请求与 ops 无关：即使这一份 delta 没有新 op，它也可能带来（或撤掉）一次出图请求。
    */
   const applyDelta = (delta: BoardDelta): void => {
-    if (delta.revision <= revision) return
+    const want = delta.snapshotRequest ?? null
+    const wantMoved = want !== snapshotRequest
+    snapshotRequest = want
+    if (delta.revision <= revision) {
+      if (wantMoved) notify()
+      return
+    }
     const start = delta.revision - delta.ops.length
     if (start > revision) {
       // 缺口一旦出现，本地就没有可增量拼接的前提了；直接跳到 delta.revision 会把缺口永久留在身后。
@@ -67,7 +92,7 @@ export function createSceneSource(options: SceneSourceOptions): SceneSource {
     }
     scene = applyOps(scene, delta.ops.slice(revision - start))
     revision = delta.revision
-    for (const listener of listeners) listener()
+    notify()
   }
 
   const poll = async (): Promise<void> => {
@@ -75,22 +100,25 @@ export function createSceneSource(options: SceneSourceOptions): SceneSource {
     await options.load(revision).then(applyDelta, () => undefined)
   }
 
+  const subscribe = (listener: () => void): (() => void) => {
+    listeners.add(listener)
+    if (timer === undefined) {
+      void poll()
+      timer = setInterval(() => { void poll() }, options.pollMs)
+    }
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0 && timer !== undefined) {
+        clearInterval(timer)
+        timer = undefined
+      }
+    }
+  }
+
   return {
     getSnapshot: () => scene,
-    subscribe: (listener) => {
-      listeners.add(listener)
-      if (timer === undefined) {
-        void poll()
-        timer = setInterval(() => { void poll() }, options.pollMs)
-      }
-      return () => {
-        listeners.delete(listener)
-        if (listeners.size === 0 && timer !== undefined) {
-          clearInterval(timer)
-          timer = undefined
-        }
-      }
-    },
+    subscribe,
+    snapshotRequest: { getSnapshot: () => snapshotRequest, subscribe },
     send: (commands) => {
       const run = sending.then(async (): Promise<readonly string[]> => {
         const delta = await options.append(commands)

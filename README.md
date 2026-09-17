@@ -42,6 +42,7 @@ pnpm dsh web --patch <本仓库路径>/blackboard.cordis.yml --port 8081 --no-op
 - 「撤销上一笔 / 清空」只作用于人自己最后一次手势；模型可以自己用 `erase` 纠错。
 - 「发给 agent」把场景层导成 PNG，作为一条普通用户消息发出去——导出的是**当前视野**，不是整块板。
 - 随图发出去的那句话取自输入栏：**输入栏里有字就用它，没有就用「这是我画的黑板。」这句默认话**；发送成功后输入栏会被清空。输入栏里挂着的附件**不会**跟着走（原因见「已知限制」）。
+- agent 可以**随时读当前画板，不需要你点任何按钮**：`blackboard_read` 向面板要一张**整块板**的 PNG（与你当时的缩放/平移无关），写到 `$DSH_HOME/blackboard/<sessionId>.png`，再用 `read_image` 看它。
 
 ## 目录
 
@@ -111,6 +112,8 @@ devDependencies 里那一长串 `@deepseek-ai/dsh-client-*` 不是装饰：dsh �
 
 - **不写 session log。** 画板真相是 `$DSH_HOME/blackboard/<sessionId>.jsonl`：仓库外插件的事件类型不在 dsh 的 `KNOWN_SESSION_EVENT_TYPES` 里，未知事件只在标了 `ignorable` 时被保留——所以在"不改 dsh 仓库"的前提下拿不到投影 / 分叉 / 回放语义。想要那些语义，得把本插件做进 `packages/`（官方仓库目前不接受外部 PR）。
 - **输入栏里的附件带不走。** 「发给 agent」只借输入栏的**文字**。草稿附件的解析与序列化全在 ui-conversation 内部：`IConversation` 只暴露 `input` / `blocks` / `send` / `updateQueue` / `cancel` / `loadOlder`，`serializeDraftAttachments` 之类只作为 composer 附件槽（`kind: 'single'`，已被 ui-attachment 占用）的 owner prop 存在，仓库外插件没有公开的路读它们。所以附件会留在输入栏，发送成功后的状态行会告诉你漏了几个。
+- **`blackboard_read` 需要面板开着。** host 没有 canvas，图只能由浏览器里的面板产出：工具先登记一次请求，面板下一次轮询（≤1s）从场景响应里看到它，出图 POST 回来；超过 2.5s 就报错。面板没开就没有图可给。
+- **host 半边的改动要重启 `dsh` 才生效**：host 由 tsx 直接跑源码、在启动时注册工具与路由，没有热重载；浏览器半边（`lib/client.js`）会热更新。
 - **1 秒轮询**，不是推送：agent 画完到人看见最多 1s，空闲时每秒一次请求。
 - **磁盘 ops 文件没有清理策略**：会话画得越多文件越大，且删会话不会删这个文件。
 - **工具 7 支**（`line`/`arrow`/`rect`/`circle`/`text`/`stroke`/`erase`）：`clear` 不开放给模型——它会一次抹掉人与 agent 的全部笔迹。

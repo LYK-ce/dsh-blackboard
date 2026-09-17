@@ -5,6 +5,8 @@ import type { AppendBody, BoardDelta } from '../shared/protocol.ts'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // 类型专用：'sidebar.right.pane.tab' 的 SlotMap 行与 sidebarRightTabs 服务由 ui-sidebar-right 声明。
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+// 类型专用：输入栏草稿的公开读写面（ctx.conversation 与 IConversation）由 ui-conversation 声明。
+import type { IConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -80,15 +82,50 @@ export function apply(ctx: Context): void {
     return await response.json() as BoardDelta
   }
 
-  const askAgent = async (sessionId: SessionId, png: Blob, text: string): Promise<BoardAskResult> => {
+  /**
+   * 读当前会话输入栏里的草稿。没挂 ui-conversation、会话没物化、草稿正处在命令或提交状态时
+   * 都算"没有可用文字"——只认 `plain` 态的纯文本，免得把用户打了一半的命令当成消息发出去。
+   * @param sessionId - 面板所属会话。
+   * @returns 可以直接当 prompt 用的文字（空串表示没有），以及会被落下的附件数量。
+   */
+  const composerDraft = (sessionId: SessionId): { readonly text: string; readonly attachments: number } => {
+    const conversation = ctx.get('conversation') as IConversation | undefined
+    const scope = ctx.sessions.scope(sessionId)
+    // 没挂 ui-conversation，或者会话没物化在这个页面上，就没有输入栏可读。
+    if (conversation === undefined || scope === undefined) return { text: '', attachments: 0 }
+    const state = conversation.input.for(scope).state.getSnapshot()
+    return {
+      text: state.phase === 'plain' ? state.draft.trim() : '',
+      attachments: state.attachmentIds.length,
+    }
+  }
+
+  /**
+   * 清空会话输入栏的草稿；只在真的把那段文字发出去之后调。
+   * @param sessionId - 面板所属会话。
+   * @returns 无。
+   */
+  const clearComposerDraft = (sessionId: SessionId): void => {
+    const conversation = ctx.get('conversation') as IConversation | undefined
+    const scope = ctx.sessions.scope(sessionId)
+    if (conversation === undefined || scope === undefined) return
+    conversation.input.for(scope).setDraft('')
+  }
+
+  const askAgent = async (sessionId: SessionId, png: Blob, fallbackText: string): Promise<BoardAskResult> => {
     const binding = ctx.sessions.binding(sessionId)
     // 会话没在这个页面打开时没有发送面；面板会把这条原因显示出来。
     if (binding === undefined) return { ok: false, reason: 'session is not bound on this page' }
+    // 输入栏里有话就用它，没有就用默认那句「这是我画的黑板」。
+    const draft = composerDraft(sessionId)
     const result = await binding.session.prompt([
       { type: 'image', mediaType: 'image/png', data: await base64Of(png), name: IMAGE_NAME },
-      { type: 'text', text },
+      { type: 'text', text: draft.text === '' ? fallbackText : draft.text },
     ], 'queue')
-    return result.ok ? { ok: true } : { ok: false, reason: `${result.error.code}: ${result.error.message}` }
+    if (!result.ok) return { ok: false, reason: `${result.error.code}: ${result.error.message}` }
+    // 成功之后输入栏不该再留着同一句话；附件留在那儿，由人自己决定接下来怎么用。
+    if (draft.text !== '') clearComposerDraft(sessionId)
+    return { ok: true, left: draft.attachments }
   }
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'blackboard: dictionaries')

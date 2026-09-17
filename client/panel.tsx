@@ -11,8 +11,13 @@ import type { BoardStyle, BoardTool, CanvasHandle } from './canvas.ts'
 import type { BlackboardKey } from './locale.ts'
 import type { SceneSource } from './source.ts'
 
-/** 把画板交给 agent 的结果。 */
-export type BoardAskResult = { readonly ok: true } | { readonly ok: false; readonly reason: string }
+/**
+ * 把画板交给 agent 的结果。
+ * `left` 是输入栏里没被带走的附件数——草稿附件没有公开的读取面，所以只能如实告诉人。
+ */
+export type BoardAskResult =
+  | { readonly ok: true; readonly left: number }
+  | { readonly ok: false; readonly reason: string }
 
 /** 画板视图的注入面：面板私有的可观察源，加两个动作。 */
 export interface BlackboardInjected {
@@ -148,7 +153,9 @@ export function BlackboardPanel({ t, useScene, draw, ask }: BlackboardPanelProps
     if (handle === null) return
     try {
       const result = await ask(await handle.toPng(), t('send.message'))
-      setStatus(result.ok ? t('send.sent') : t('send.failed', { reason: result.reason }))
+      setStatus(result.ok
+        ? (result.left === 0 ? t('send.sent') : t('send.leftAttachments', { count: result.left }))
+        : t('send.failed', { reason: result.reason }))
     } catch (error: unknown) {
       // ask 只在 PNG 编码失败或远程调用装配故障时抛；两者都要让用户看见。
       setStatus(t('send.failed', { reason: describe(error) }))

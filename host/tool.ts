@@ -31,6 +31,11 @@ const PAINT = {
   width: { type: 'number', required: true, description: 'Stroke width in virtual units; 4 is the default.' },
 } as const
 
+/** 可填充形状共用的一个可选参数：不给就是不填。 */
+const FILL = {
+  fill: { type: 'string', description: "Fill color as '#rrggbb'; omit it to leave the shape unfilled." },
+} as const
+
 /**
  * 七支绘图命令。`clear` 不开放给模型：它能一次抹掉人与 agent 的全部笔迹。
  * 每支靠 `op` 的 `const` 区分，校验是 exactly-one。
@@ -55,6 +60,7 @@ const COMMAND = {
         at: { ...POINT_PROP, description: 'Top-left corner.' },
         size: { ...POINT_PROP, description: 'Width and height in x and y.' },
         ...PAINT,
+        ...FILL,
       },
     },
     {
@@ -65,6 +71,7 @@ const COMMAND = {
         center: POINT_PROP,
         radius: { type: 'number', required: true },
         ...PAINT,
+        ...FILL,
       },
     },
     {
@@ -72,10 +79,11 @@ const COMMAND = {
       additionalProperties: false,
       properties: {
         op: { type: 'string', const: 'text', required: true },
-        at: { ...POINT_PROP, description: 'Left edge of the text; y is its vertical centre.' },
+        at: { ...POINT_PROP, description: 'Text anchor: x is the aligned edge (left edge, centre, or right edge per align) and y is its vertical centre.' },
         text: { type: 'string', required: true },
         size: { type: 'number', required: true, description: 'Font size in virtual units.' },
         color: PAINT.color,
+        align: { type: 'string', enum: ['start', 'middle', 'end'], description: 'Horizontal text alignment; start is the default.' },
       },
     },
     {

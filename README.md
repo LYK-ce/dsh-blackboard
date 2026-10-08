@@ -89,6 +89,7 @@ pnpm dsh --profile web --dump-config | Select-String 'blackboard-host'
 
 - 画布上手势：左键画（工具栏切换工具、颜色、线宽），**中键拖拽平移视野**，**滚轮缩放**。缩放下限就是整块板刚好铺满画布，缩到底自动回中；拖侧栏边改变容器尺寸时，缩放倍数与视野中心都保留。
 - 「撤销上一笔 / 清空」只作用于人自己最后一次手势；模型可以自己用 `erase` 纠错。
+- 模型画 `rect` / `circle` 时可以带 `fill` 给形状填色（省略这个字段就是只描边，元素上也不会写上它）；画 `text` 时可以带 `align: 'middle'` 或 `align: 'end'` 指定水平对齐（省略按 `start`，即 `at` 为左边缘与垂直中心）。
 - 「发给 agent」把场景层导成 PNG，作为一条普通用户消息发出去——导出的是**当前视野**，不是整块板。
 - 随图发出去的那句话取自输入栏：**输入栏里有字就用它，没有就用「这是我画的黑板。」这句默认话**；发送成功后输入栏会被清空。输入栏里挂着的附件**不会**跟着走（原因见「已知限制」）。
 - agent 可以**随时读当前画板，不需要你点任何按钮**：`blackboard_read` 向面板要一张**整块板**的 PNG（与你当时的缩放/平移无关），写到 `$DSH_HOME/blackboard/<sessionId>.png`，再用 `read_image` 看它。
@@ -103,7 +104,7 @@ shared/                 ops 流（SceneOp / applyOps / opsFromCommands）与 wir
 host/                   插件宿主半边：index / store / routes / tool
 client/                 浏览器半边：index / panel / canvas / source / locale
 build/build-client.mjs  esbuild → lib/client.js（模块表 lazy-CJS 协议）
-tests/                  node:test 单测（64 例）
+tests/                  node:test 单测（75 例）
 lib/client.js           构建产物，**启动前必须存在，且已进版本库**
 probe-host-import.mjs   探测 Loader 用 tsx 加载 host 半边时包名导入能否解析
 ```
@@ -134,7 +135,7 @@ pnpm run verify   # = typecheck && build && test && probe
 | 命令 | 作用 |
 |---|---|
 | `pnpm run typecheck` | host / client 两个 program 各自 `tsc --noEmit`，各自解析自己那半的 `@deepseek-ai/*` 类型 |
-| `pnpm run test` | `node --import tsx/esm --test tests/*.spec.ts`，64 例 |
+| `pnpm run test` | `node --import tsx/esm --test tests/*.spec.ts`，75 例 |
 | `pnpm run build` | esbuild 打 `lib/client.js`（改动客户端代码后必须重跑，没有 HMR） |
 | `pnpm run probe` | 验证 Loader 用 tsx 加载 `host/index.ts` 时 `@deepseek-ai/dsh-*` 包名导入能解析 |
 
@@ -156,7 +157,7 @@ devDependencies 里那一长串 `@deepseek-ai/dsh-client-*`（以及 `@deepseek-
 在一条全新的独立安装上（`pnpm install` → `pnpm run verify`，不依赖任何 dsh checkout）：
 
 - `pnpm run typecheck` 零错误——两个 program 都是对着 npm 上发布的类型编译的（host 半边 `0.2.1-alpha.1`，浏览器半边 `0.1.6-alpha.1`）；
-- `pnpm run test` **64/64** 通过（含快照请求的交付闭环、参数与迟到交付分支、账本超时与后请求抢占）；
+- `pnpm run test` **75/75** 通过（含快照请求的交付闭环、参数与迟到交付分支、账本超时与后请求抢占，以及类型 `DrawCommand` 与工具参数 schema 的漂移守卫）；
 - `pnpm run build` 产出 `lib/client.js`（`pnpm run verify` 里 build 排在 test 前面：`tests/manifest.spec.ts` 检查的是构建产物，全新 clone 上先 test 会 ENOENT）；
 - `pnpm run probe` 确认 tsx 能解析 host 半边的包名导入；
 - `dsh.bundle.patch` 交给 dsh 自己的装载器（`@deepseek-ai/dsh-app-boot` 的 `bundlePatchPaths` → `loadOverlayPatches` → `composeEntries`）：目录解析成 `<包目录>/blackboard.cordis.yml`，行名被锚成包内的 `file:///…/dsh-blackboard/host/index.ts`，entry 名 `blackboard-host`。

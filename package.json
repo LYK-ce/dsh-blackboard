@@ -1,6 +1,6 @@
 {
   "name": "dsh-blackboard",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Human/agent shared drawing board for DeepSeek Harness: a right-sidebar board plus the blackboard_draw tool",
   "type": "module",
   "license": "MIT",

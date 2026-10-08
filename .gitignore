@@ -1,4 +1,8 @@
 node_modules/
-lib/
+# lib/ 里只有 lib/client.js 是发布产物（dsh.client 声明的 bundle，缺了 dsh 启动就失败），
+# 必须进版本库：git 装法拿不到构建步骤（本包刻意不放 prepare，见 README）。
+# 其余构建残渣仍然忽略。
+lib/*
+!lib/client.js
 *.log
 .DS_Store
